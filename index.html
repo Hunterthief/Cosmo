@@ -212,6 +212,9 @@
       box-shadow: 0 10px 20px rgba(0,0,0,0.3);
       position: relative;
       height: 300px;
+      background: #0f0f19;
+      display: flex;
+      flex-direction: column;
     }
 
     .photo-like {
@@ -240,6 +243,8 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+      display: block;
+      flex: 1 1 auto;
     }
 
     .loading {
@@ -263,6 +268,17 @@
       font-style: italic;
       grid-column: 1 / -1;
     }
+
+    .post-meta {
+      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .uploader-name { color: var(--light); font-size: 0.9rem; opacity: 0.9; }
+    .post-time { color: rgba(255,255,255,0.6); font-size: 0.85rem; }
 
     @media (max-width: 900px) {
       .details-container {
@@ -344,6 +360,13 @@
           <p data-key="communityDesc">Upload your game photos and see what others are creating!</p>
           <input type="file" id="photoUpload" class="file-input" accept="image/*">
           <label for="photoUpload" class="upload-btn" data-key="uploadBtn">Upload Photo</label>
+          <div style="margin-top:12px; color:rgba(255,255,255,0.8); font-size:0.9rem;">
+            <label style="font-weight:600;">Name (optional):</label>
+            <input id="uploaderName" type="text" placeholder="Anonymous" style="margin-left:8px; padding:6px 8px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:white;">
+          </div>
+          <div style="margin-top:8px; color:rgba(255,255,255,0.7); font-size:0.85rem;">
+            <span>Community photos are stored using JSONBin.io and imgbb.com (both free).</span>
+          </div>
         </div>
 
         <div class="photo-grid" id="photoGrid">
@@ -379,7 +402,8 @@
           uploadError: 'Error uploading photo. Please try again.',
           likeError: 'Error updating likes. Please try again.',
           fileSizeError: 'File size too large. Please upload an image smaller than 1MB.',
-          fileTypeError: 'Please upload an image file.'
+          fileTypeError: 'Please upload an image file.',
+          fetchError: 'Error fetching posts. Check your JSONBin configuration.'
         },
         ar: {
           logo: 'كوزموفورج',
@@ -403,7 +427,8 @@
           uploadError: 'خطأ في تحميل الصورة. يرجى المحاولة مرة أخرى.',
           likeError: 'خطأ في تحديث الإعجابات. يرجى المحاولة مرة أخرى.',
           fileSizeError: 'حجم الملف كبير جدًا. يرجى تحميل صورة أصغر من 1 ميجابايت.',
-          fileTypeError: 'يرجى تحميل ملف صورة.'
+          fileTypeError: 'يرجى تحميل ملف صورة.',
+          fetchError: 'خطأ في جلب المنشورات. تحقق من تكوين JSONBin.'
         }
       };
 
@@ -414,8 +439,21 @@
       const photoGrid = document.getElementById('photoGrid');
       const infoMessage = document.getElementById('infoMessage');
 
-      // Community storage key
-      const STORAGE_KEY = 'cosmoCommunityPhotos';
+      // ✅ YOUR JSONBIN.IO CONFIGURATION ✅
+      const JSONBIN_BIN_ID = "6939ce65ae596e708f90db24";
+      const JSONBIN_SECRET_KEY = "$2a$10$XrpokQnnQEs7KTkuuGU.SugRPerfYquGH0BR/QJ.NfQJ1GQAoqsbC";
+      
+      // imgbb API key (keep this working)
+      const IMGBB_API_KEY = '97cd51bcdaad92653ae70c44b18be538';
+
+      // JSONBin.io API URLs
+      const JSONBIN_READ_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`;
+      const JSONBIN_WRITE_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+
+      // End CONFIG
+
+      // Community storage key (local fallback)
+      const STORAGE_KEY = 'cosmoCommunityPhotos_local';
 
       function updateLanguage(lang) {
         // Update document attributes
@@ -458,146 +496,284 @@
           });
           document.getElementById(targetTab).classList.add('active');
           
-          // If community tab is activated, load photos
+          // If community tab is activated, load posts
           if (targetTab === 'community') {
-            loadPhotos();
+            startPollingPosts();
+            loadPosts();
+          } else {
+            stopPollingPosts();
           }
         });
       });
 
-      // Get photos from localStorage
-      function getPhotos() {
-        const photosJSON = localStorage.getItem(STORAGE_KEY);
-        return photosJSON ? JSON.parse(photosJSON) : [];
+      // ✅ JSONBIN.IO FUNCTIONS ✅
+      async function fetchRemotePosts() {
+        try {
+          const response = await fetch(JSONBIN_READ_URL, {
+            headers: {
+              'X-Master-Key': JSONBIN_SECRET_KEY
+            },
+            cache: 'no-store'
+          });
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const data = await response.json();
+          return data.record || []; // JSONBin returns data in .record field
+        } catch (err) {
+          console.error('fetchRemotePosts error', err);
+          return null;
+        }
       }
 
-      // Save photos to localStorage
-      function savePhotos(photos) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(photos));
+      async function writeRemotePosts(posts) {
+        try {
+          const response = await fetch(JSONBIN_WRITE_URL, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Master-Key': JSONBIN_SECRET_KEY,
+              'X-Bin-Private': 'true'
+            },
+            body: JSON.stringify({ record: posts }) // JSONBin expects data in .record field
+          });
+          
+          return response.ok;
+        } catch (err) {
+          console.error('writeRemotePosts error', err);
+          return false;
+        }
       }
 
-      // Photo upload functionality
+      function getLocalPosts() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      }
+      
+      function setLocalPosts(posts) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(posts));
+      }
+
+      // Merge remote & local (remote has priority for shared view)
+      async function getAllPosts() {
+        const remote = await fetchRemotePosts();
+        if (remote === null) {
+          // remote fetch failed -> fallback to local
+          return getLocalPosts();
+        }
+        // remote fetched successfully -> use it (and keep a local copy)
+        setLocalPosts(remote);
+        return remote;
+      }
+
+      // Render posts into grid (preserves existing styles)
+      async function loadPosts() {
+        try {
+          const posts = await getAllPosts();
+          // Clear grid
+          photoGrid.innerHTML = '';
+          if (!posts || posts.length === 0) {
+            photoGrid.innerHTML = `<div class="info-message">${translations[currentLang].infoMessage}</div>`;
+            return;
+          }
+          // Build cards
+          posts.forEach(post => {
+            const card = document.createElement('div');
+            card.className = 'photo-card';
+            card.innerHTML = `
+              <img class="photo-image" src="${post.url}" alt="Community photo">
+              <div class="post-meta">
+                <div>
+                  <div class="uploader-name">${post.uploader ? escapeHtml(post.uploader) : ''}</div>
+                  <div class="post-time">${timeAgo(post.created_at)}</div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <div style="color:var(--gold); font-weight:700;">${post.likes || 0} ❤️</div>
+                  <button class="photo-like" data-id="${post.id}" title="Like">+</button>
+                </div>
+              </div>
+            `;
+            photoGrid.appendChild(card);
+          });
+
+          // Wire up like buttons
+          document.querySelectorAll('.photo-like').forEach(btn => {
+            btn.addEventListener('click', async function(e) {
+              e.stopPropagation();
+              const id = this.getAttribute('data-id');
+              await likePost(id);
+            });
+          });
+        } catch (err) {
+          console.error('Error loading posts', err);
+          photoGrid.innerHTML = `<div class="error">${translations[currentLang].fetchError}</div>`;
+        }
+      }
+
+      // Like post (works remote)
+      let likeLock = false;
+      async function likePost(id) {
+        if (likeLock) return;
+        likeLock = true;
+        try {
+          // remote flow: fetch, update, write
+          const remote = await fetchRemotePosts();
+          if (remote === null) { likeLock = false; return; }
+          const posts = Array.isArray(remote) ? remote : [];
+          const idx = posts.findIndex(x => String(x.id) === String(id));
+          if (idx === -1) { likeLock = false; return; }
+          posts[idx].likes = (posts[idx].likes || 0) + 1;
+          // write back
+          const ok = await writeRemotePosts(posts);
+          if (ok) {
+            // update local copy & UI
+            setLocalPosts(posts);
+            loadPosts();
+          } else {
+            alert(translations[currentLang].likeError);
+          }
+        } catch (err) {
+          console.error('likePost error', err);
+          alert(translations[currentLang].likeError);
+        } finally {
+          likeLock = false;
+        }
+      }
+
+      // Upload image: to imgbb (requires API key). We send base64 (strip data: prefix)
+      async function uploadToImgbb(base64Data) {
+        if (!IMGBB_API_KEY) return null;
+        try {
+          // base64Data includes "data:image/...;base64,..." -> strip header
+          const parts = base64Data.split(',');
+          const payload = parts.length > 1 ? parts[1] : parts[0];
+          const form = new FormData();
+          form.append('image', payload);
+          // optional: name field
+          form.append('name', 'cosmoforge_' + Date.now());
+          const res = await fetch('https://api.imgbb.com/1/upload?key=' + encodeURIComponent(IMGBB_API_KEY), {
+            method: 'POST',
+            body: form
+          });
+          const json = await res.json();
+          if (json && json.success && json.data && json.data.url) return json.data.url;
+          console.error('imgbb upload failed', json);
+          return null;
+        } catch (err) {
+          console.error('uploadToImgbb error', err);
+          return null;
+        }
+      }
+
+      // Create new post (upload -> write to jsonbin)
       const photoUpload = document.getElementById('photoUpload');
+      const uploaderNameInput = document.getElementById('uploaderName');
 
       photoUpload.addEventListener('change', function(e) {
         if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
-          
+
           // Check file size (limit to 1MB)
           if (file.size > 1000000) {
             alert(translations[currentLang].fileSizeError);
             return;
           }
-          
+
           // Check file type
           if (!file.type.match('image.*')) {
             alert(translations[currentLang].fileTypeError);
             return;
           }
-          
+
           const reader = new FileReader();
-          
-          reader.onloadend = function() {
+          reader.onloadend = async function() {
             const base64Image = reader.result;
-            
+
             try {
-              // Get current photos
-              let photos = getPhotos();
-              
-              // Add new photo
-              const newPhoto = {
-                id: Date.now(),
-                url: base64Image,
+              // Upload to imgbb
+              const imageUrl = await uploadToImgbb(base64Image);
+              if (!imageUrl) {
+                alert(translations[currentLang].uploadError);
+                return;
+              }
+
+              // prepare new post
+              const newPost = {
+                id: Date.now() + Math.floor(Math.random()*1000),
+                url: imageUrl,
                 likes: 0,
+                uploader: uploaderNameInput.value ? uploaderNameInput.value.trim() : '',
                 created_at: new Date().toISOString()
               };
-              
-              photos.unshift(newPhoto);
-              
-              // Save to localStorage
-              savePhotos(photos);
-              
-              // Clear file input
+
+              // fetch current remote, add to top, write back
+              const remote = await fetchRemotePosts();
+              const posts = Array.isArray(remote) ? remote : [];
+              posts.unshift(newPost);
+              const ok = await writeRemotePosts(posts);
+              if (!ok) {
+                alert(translations[currentLang].uploadError);
+                return;
+              }
+              // update local copy & UI
+              setLocalPosts(posts);
+              loadPosts();
+
+              // Clear file input and name field
               photoUpload.value = '';
-              
-              // Reload photos
-              loadPhotos();
+              uploaderNameInput.value = '';
+
             } catch (error) {
               console.error('Error uploading photo:', error);
               alert(translations[currentLang].uploadError);
             }
           };
-          
+
           reader.readAsDataURL(file);
         }
       });
 
-      // Load photos from localStorage
-      function loadPhotos() {
-        try {
-          const photos = getPhotos();
-          
-          // Clear grid
-          photoGrid.innerHTML = '';
-          
-          if (photos.length === 0) {
-            photoGrid.innerHTML = `<div class="info-message">${translations[currentLang].infoMessage}</div>`;
-            return;
-          }
-          
-          // Create photo cards
-          photos.forEach(photo => {
-            const card = document.createElement('div');
-            card.className = 'photo-card';
-            
-            card.innerHTML = `
-              <img class="photo-image" src="${photo.url}" alt="Community photo">
-              <button class="photo-like" data-id="${photo.id}">
-                ❤️ <span class="like-count">${photo.likes}</span>
-              </button>
-            `;
-            
-            photoGrid.appendChild(card);
-          });
-          
-          // Add like event listeners
-          document.querySelectorAll('.photo-like').forEach(btn => {
-            btn.addEventListener('click', function() {
-              const id = parseInt(this.getAttribute('data-id'));
-              const likeCountElement = this.querySelector('.like-count');
-              const currentLikes = parseInt(likeCountElement.textContent);
-              
-              try {
-                // Get current photos
-                let photos = getPhotos();
-                
-                // Find and update the photo
-                const photo = photos.find(p => p.id === id);
-                if (photo) {
-                  photo.likes = currentLikes + 1;
-                  
-                  // Save updated photos
-                  savePhotos(photos);
-                  
-                  // Update UI
-                  likeCountElement.textContent = photo.likes;
-                }
-              } catch (error) {
-                console.error('Error updating likes:', error);
-                alert(translations[currentLang].likeError);
-              }
-            });
-          });
-        } catch (error) {
-          console.error('Error loading photos:', error);
-          photoGrid.innerHTML = `<div class="error">${translations[currentLang].uploadError}</div>`;
-        }
+      // Polling to get remote updates (near realtime)
+      let pollHandle = null;
+      function startPollingPosts() {
+        if (pollHandle) return;
+        // initial load
+        loadPosts();
+        // poll every 3 seconds
+        pollHandle = setInterval(() => {
+          loadPosts();
+        }, 3000);
+      }
+      function stopPollingPosts() {
+        if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
       }
 
-      // Initial load of photos if on community tab
-      if (document.getElementById('community').classList.contains('active')) {
-        loadPhotos();
+      // Time ago helper
+      function timeAgo(iso) {
+        try {
+          const d = new Date(iso);
+          const diff = Math.floor((Date.now() - d.getTime())/1000);
+          if (diff < 60) return `${diff}s`;
+          if (diff < 3600) return `${Math.floor(diff/60)}m`;
+          if (diff < 86400) return `${Math.floor(diff/3600)}h`;
+          return `${Math.floor(diff/86400)}d`;
+        } catch (e) { return ''; }
       }
+
+      // small safety: escape text
+      function escapeHtml(s) {
+        if (!s) return '';
+        return s.replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; });
+      }
+
+      // initial load if community active
+      if (document.getElementById('community').classList.contains('active')) {
+        startPollingPosts();
+        loadPosts();
+      }
+
     });
   </script>
 </body>
