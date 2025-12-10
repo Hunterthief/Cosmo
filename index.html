@@ -151,14 +151,11 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      max-height: 80vh;
     }
 
     .secondary-image {
       width: 100%;
       height: auto;
-      max-height: 80vh;
-      object-fit: contain;
       display: block;
       border-radius: 15px;
     }
@@ -248,10 +245,6 @@
       .details-container {
         grid-template-columns: 1fr;
       }
-      
-      .secondary-image-container {
-        max-height: 60vh;
-      }
     }
 
     @media (max-width: 768px) {
@@ -265,10 +258,6 @@
       
       .details-container {
         grid-template-columns: 1fr;
-      }
-      
-      .secondary-image-container {
-        max-height: 50vh;
       }
     }
   </style>
