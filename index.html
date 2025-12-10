@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CosmoForge - Game Community</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * {
       margin: 0;
@@ -229,6 +230,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      z-index: 10;
     }
 
     .photo-like:hover {
@@ -239,6 +241,20 @@
       width: 100%;
       height: 100%;
       object-fit: cover;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      font-size: 1.2rem;
+      color: var(--gold);
+    }
+
+    .error {
+      text-align: center;
+      padding: 20px;
+      color: var(--accent);
+      font-weight: bold;
     }
 
     @media (max-width: 900px) {
@@ -324,7 +340,7 @@
         </div>
 
         <div class="photo-grid" id="photoGrid">
-          <!-- Photos will be added here dynamically -->
+          <div class="loading" id="loading">Loading community photos...</div>
         </div>
       </div>
     </div>
@@ -332,6 +348,13 @@
 
   <script>
     document.addEventListener('DOMContentLoaded', function() {
+      // Supabase configuration - REPLACE WITH YOUR OWN CREDENTIALS
+      const SUPABASE_URL = 'https://your-project-ref.supabase.co';
+      const SUPABASE_KEY = 'your-anon-key-here';
+      
+      // Initialize Supabase client
+      const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      
       // Translation data
       const translations = {
         en: {
@@ -351,7 +374,11 @@
           feature4Desc: 'Every session ends with a unique sculpture built by your team—a physical memory of your energy together.',
           communityTitle: 'Share Your CosmoForge Moments',
           communityDesc: 'Upload your game photos and see what others are creating!',
-          uploadBtn: 'Upload Photo'
+          uploadBtn: 'Upload Photo',
+          loading: 'Loading community photos...',
+          error: 'Error loading photos. Please try again later.',
+          uploadError: 'Error uploading photo. Please try again.',
+          likeError: 'Error updating likes. Please try again.'
         },
         ar: {
           logo: 'كوزموفورج',
@@ -370,7 +397,11 @@
           feature4Desc: 'ينتهي كل جلسة بتمثال فريد يبنيه فريقك - ذاكرة مادية لطاقتك معًا.',
           communityTitle: 'شارك لحظات كوزموفورج الخاصة بك',
           communityDesc: 'قم بتحميل صور لعبتك وانظر ما الذي يصنعه الآخرون!',
-          uploadBtn: 'تحميل صورة'
+          uploadBtn: 'تحميل صورة',
+          loading: 'جاري تحميل الصور من المجتمع...',
+          error: 'خطأ في تحميل الصور. يرجى المحاولة لاحقًا.',
+          uploadError: 'خطأ في تحميل الصورة. يرجى المحاولة مرة أخرى.',
+          likeError: 'خطأ في تحديث الإعجابات. يرجى المحاولة مرة أخرى.'
         }
       };
 
@@ -378,6 +409,8 @@
       const langToggle = document.getElementById('langToggle');
       const htmlElement = document.documentElement;
       let currentLang = 'en';
+      const photoGrid = document.getElementById('photoGrid');
+      const loadingElement = document.getElementById('loading');
 
       function updateLanguage(lang) {
         // Update document attributes
@@ -390,6 +423,12 @@
           if (translations[lang][key]) {
             el.textContent = translations[lang][key];
           }
+        });
+        
+        // Update loading and error messages
+        loadingElement.textContent = translations[lang].loading;
+        document.querySelectorAll('.error').forEach(el => {
+          el.textContent = translations[lang].error;
         });
         
         // Update language toggle button
@@ -416,43 +455,109 @@
             section.classList.remove('active');
           });
           document.getElementById(targetTab).classList.add('active');
+          
+          // If community tab is activated, load photos
+          if (targetTab === 'community') {
+            loadPhotos();
+          }
         });
       });
 
       // Photo upload functionality
       const photoUpload = document.getElementById('photoUpload');
-      const photoGrid = document.getElementById('photoGrid');
-      let photos = [];
 
-      photoUpload.addEventListener('change', function(e) {
+      photoUpload.addEventListener('change', async function(e) {
         if (e.target.files && e.target.files[0]) {
+          const file = e.target.files[0];
+          
+          // Check file size (limit to 1MB)
+          if (file.size > 1000000) {
+            alert('File size too large. Please upload an image smaller than 1MB.');
+            return;
+          }
+          
+          // Check file type
+          if (!file.type.match('image.*')) {
+            alert('Please upload an image file.');
+            return;
+          }
+          
           const reader = new FileReader();
           
-          reader.onload = function(event) {
-            const photo = {
-              id: Date.now(),
-              url: event.target.result,
-              likes: 0
-            };
+          reader.onloadend = async function() {
+            const base64Image = reader.result;
             
-            photos.push(photo);
-            renderPhotos();
+            try {
+              // Upload to Supabase
+              const { data, error } = await supabase
+                .from('photos')
+                .insert([
+                  { 
+                    url: base64Image,
+                    likes: 0,
+                    created_at: new Date().toISOString()
+                  }
+                ])
+                .select();
+                
+              if (error) throw error;
+              
+              // Clear file input
+              photoUpload.value = '';
+              
+              // Reload photos
+              loadPhotos();
+            } catch (error) {
+              console.error('Error uploading photo:', error);
+              alert(translations[currentLang].uploadError);
+            }
           };
           
-          reader.readAsDataURL(e.target.files[0]);
+          reader.readAsDataURL(file);
         }
       });
 
-      function renderPhotos() {
+      // Load photos from Supabase
+      async function loadPhotos() {
+        try {
+          // Show loading state
+          photoGrid.innerHTML = `<div class="loading">${translations[currentLang].loading}</div>`;
+          
+          // Fetch photos from Supabase
+          const { data, error } = await supabase
+            .from('photos')
+            .select('*')
+            .order('created_at', { ascending: false });
+            
+          if (error) throw error;
+          
+          // Render photos
+          renderPhotos(data);
+        } catch (error) {
+          console.error('Error loading photos:', error);
+          photoGrid.innerHTML = `<div class="error">${translations[currentLang].error}</div>`;
+        }
+      }
+
+      function renderPhotos(photos) {
+        // Clear grid
         photoGrid.innerHTML = '';
         
+        if (photos.length === 0) {
+          photoGrid.innerHTML = `<div class="loading" style="grid-column: 1 / -1; padding: 40px;">No photos yet. Be the first to share!</div>`;
+          return;
+        }
+        
+        // Create photo cards
         photos.forEach(photo => {
           const card = document.createElement('div');
           card.className = 'photo-card';
           
           card.innerHTML = `
-            <img class="photo-image" src="${photo.url}" alt="User photo">
-            <button class="photo-like" data-id="${photo.id}">❤️ ${photo.likes}</button>
+            <img class="photo-image" src="${photo.url}" alt="Community photo">
+            <button class="photo-like" data-id="${photo.id}">
+              ❤️ <span class="like-count">${photo.likes}</span>
+            </button>
           `;
           
           photoGrid.appendChild(card);
@@ -460,26 +565,37 @@
         
         // Add like event listeners
         document.querySelectorAll('.photo-like').forEach(btn => {
-          btn.addEventListener('click', function() {
-            const id = parseInt(this.getAttribute('data-id'));
-            const photo = photos.find(p => p.id === id);
-            if (photo) {
-              photo.likes++;
-              renderPhotos();
+          btn.addEventListener('click', async function() {
+            const id = this.getAttribute('data-id');
+            const likeCountElement = this.querySelector('.like-count');
+            const currentLikes = parseInt(likeCountElement.textContent);
+            
+            try {
+              // Update likes in Supabase
+              const { error } = await supabase
+                .from('photos')
+                .update({ likes: currentLikes + 1 })
+                .eq('id', id);
+                
+              if (error) throw error;
+              
+              // Update UI immediately
+              likeCountElement.textContent = currentLikes + 1;
+              
+              // Reload photos to ensure consistency
+              loadPhotos();
+            } catch (error) {
+              console.error('Error updating likes:', error);
+              alert(translations[currentLang].likeError);
             }
           });
         });
       }
 
-      // Initialize with some demo photos
-      const demoPhotos = [
-        { id: 1, url: 'https://placehold.co/600x400/1a1a2e/ffffff?text=Community+Photo+1', likes: 5 },
-        { id: 2, url: 'https://placehold.co/600x400/16213e/ffffff?text=Community+Photo+2', likes: 12 },
-        { id: 3, url: 'https://placehold.co/600x400/e94560/ffffff?text=Community+Photo+3', likes: 8 }
-      ];
-      
-      photos = demoPhotos;
-      renderPhotos();
+      // Initial load of photos if on community tab
+      if (document.getElementById('community').classList.contains('active')) {
+        loadPhotos();
+      }
     });
   </script>
 </body>
